@@ -58,8 +58,31 @@ func main() {
 		cancel()
 	}()
 
-	if err := service.StartMonitoring(ctx); err != nil {
-		log.Fatalf("Monitoring failed: %v", err)
+	go func() {
+		if err := service.StartMonitoring(ctx); err != nil {
+			log.Fatalf("Monitoring failed: %v", err)
+		}
+	}()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stats/{website}", monitor.CreateGetStatsEndpoint(service))
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	go func() {
+		fmt.Println("Starting server on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("HTTP server error: %v\n", err)
+		}
+	}()
+
+	<-ctx.Done()
+
+	if err := server.Shutdown(ctx); err != nil {
+		fmt.Printf("Server forced to shutdown: %v\n", err)
 	}
 }
 

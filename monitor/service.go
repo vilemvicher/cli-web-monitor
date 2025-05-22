@@ -4,15 +4,20 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
+	"cli-web-monitor/jsonmodel"
 	"cli-web-monitor/stats"
 )
+
+const pageSize = 5
 
 type Service interface {
 	StartMonitoring(context.Context) error
 	GetStats() map[string]*stats.Stats
+	GetStatsForUrl(string, string) *jsonmodel.WebsiteResponse
 }
 
 type service struct {
@@ -87,6 +92,55 @@ func (srv *service) GetStats() map[string]*stats.Stats {
 	return srv.statsMap
 }
 
+func (srv *service) GetStatsForUrl(url string, pageStr string) *jsonmodel.WebsiteResponse {
+	stats, ok := srv.statsMap[url]
+
+	if !ok {
+		return nil
+	}
+
+	page := 1
+
+	if pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	// sample full list
+	allResponses := stats.Responses
+	totalItems := len(allResponses)
+	totalPages := (totalItems + pageSize - 1) / pageSize
+
+	// calculate start and end indices
+	start := (page - 1) * pageSize
+	end := start + pageSize
+
+	if start > totalItems {
+		start = totalItems
+	}
+
+	if end > totalItems {
+		end = totalItems
+	}
+
+	// paginated slice
+	paginated := allResponses[start:end]
+
+	// build response
+	res := new(jsonmodel.WebsiteResponse)
+	res.Pagination = jsonmodel.Pagination{
+		Page:       page,
+		TotalPages: totalPages,
+		Items:      len(paginated),
+		TotalItems: totalItems,
+	}
+
+	res.Requests = paginated
+
+	return res
+}
+
 func monitorURL(
 	ctx context.Context,
 	url string,
@@ -97,46 +151,45 @@ func monitorURL(
 	client *http.Client,
 ) {
 	defer wg.Done()
-	busy := false
+	busyChan := make(chan struct{}, 1) // semaphore for serial processing
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tickChan:
-			if busy {
-				// skip this tick if a last request is still running
-				continue
+			select {
+			case busyChan <- struct{}{}:
+				go func() {
+					defer func() {
+						<-busyChan // release busy
+					}()
+
+					start := time.Now()
+					resp, err := client.Get(url)
+					duration := time.Since(start)
+
+					success := false
+					size := 0
+
+					if err == nil {
+						defer resp.Body.Close()
+						success = resp.StatusCode >= 200 && resp.StatusCode < 400
+
+						bodyBytes, _ := io.ReadAll(resp.Body)
+						size += len(bodyBytes) / 1024
+					}
+
+					stats.Add(duration, size, success, start)
+
+					select {
+					case renderChan <- struct{}{}:
+					default:
+					}
+				}()
+			default:
+				// already busy, skip this tick
 			}
-
-			busy = true
-
-			go func() {
-				defer func() { busy = false }()
-
-				start := time.Now()
-				resp, err := client.Get(url)
-				duration := time.Since(start)
-
-				success := false
-				size := 0
-
-				if err == nil {
-					defer resp.Body.Close()
-					success = resp.StatusCode >= 200 && resp.StatusCode < 400
-
-					bodyBytes, _ := io.ReadAll(resp.Body)
-
-					size += len(bodyBytes) / 1024
-				}
-
-				stats.Add(duration, size, success)
-
-				select {
-				case renderChan <- struct{}{}:
-				default:
-				}
-			}()
 		}
 	}
 }

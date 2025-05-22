@@ -18,10 +18,13 @@ import (
 func TestService_OneRequestAtATimePerURL(t *testing.T) {
 	t.Parallel()
 
-	httpmock.Activate()
-	defer httpmock.DeactivateAndReset()
+	mockTransport := httpmock.NewMockTransport()
 
-	// mock URL
+	// Create http client with isolated mock transport
+	client := &http.Client{
+		Transport: mockTransport,
+	}
+
 	url := "http://example.com/success"
 
 	var (
@@ -29,8 +32,8 @@ func TestService_OneRequestAtATimePerURL(t *testing.T) {
 		mu          sync.Mutex
 	)
 
-	// mock responses
-	httpmock.RegisterResponder("GET", url,
+	// Register the mock response on isolated transport
+	mockTransport.RegisterResponder("GET", url,
 		func(req *http.Request) (*http.Response, error) {
 			mu.Lock()
 			activeCalls++
@@ -54,7 +57,7 @@ func TestService_OneRequestAtATimePerURL(t *testing.T) {
 
 	cfg := MonitorConfig{
 		URLs:       []string{url},
-		Client:     &http.Client{},
+		Client:     client,
 		Renderer:   mockRenderer,
 		TickPeriod: 30 * time.Millisecond, // ticks faster than handler finishes
 	}
@@ -74,8 +77,11 @@ func TestService_OneRequestAtATimePerURL(t *testing.T) {
 func TestService_ParallelRequestsAcrossDifferentURLs(t *testing.T) {
 	t.Parallel()
 
-	httpmock.Activate()
-	defer httpmock.DeactivateAndReset()
+	mockTransport := httpmock.NewMockTransport()
+
+	client := &http.Client{
+		Transport: mockTransport,
+	}
 
 	// mock URLs
 	urls := []string{
@@ -94,7 +100,7 @@ func TestService_ParallelRequestsAcrossDifferentURLs(t *testing.T) {
 	for _, url := range urls {
 		u := url // capture loop var
 
-		httpmock.RegisterResponder("GET", u,
+		mockTransport.RegisterResponder("GET", u,
 			func(req *http.Request) (*http.Response, error) {
 				mu.Lock()
 				activeURLs[u] = true
@@ -120,7 +126,7 @@ func TestService_ParallelRequestsAcrossDifferentURLs(t *testing.T) {
 
 	cfg := MonitorConfig{
 		URLs:       urls,
-		Client:     &http.Client{},
+		Client:     client,
 		Renderer:   renderer,
 		TickPeriod: 20 * time.Millisecond,
 	}
@@ -143,10 +149,14 @@ func TestService_ParallelRequestsAcrossDifferentURLs(t *testing.T) {
 func TestService_AllCombinations(t *testing.T) {
 	t.Parallel()
 
-	httpmock.Activate()
-	defer httpmock.DeactivateAndReset()
+	mockTransport := httpmock.NewMockTransport()
 
-	// mock URL
+	client := &http.Client{
+		Transport: mockTransport,
+		Timeout:   300 * time.Millisecond,
+	}
+
+	// mock URLs
 	urls := []string{
 		"http://example.com/success",
 		"http://example.com/failure",
@@ -155,28 +165,29 @@ func TestService_AllCombinations(t *testing.T) {
 	}
 
 	// mock responses
-	httpmock.RegisterResponder("GET", urls[0],
+	mockTransport.RegisterResponder("GET", urls[0],
 		httpmock.NewStringResponder(200, `{"status":"ok"}`)) // 200 OK
 
-	httpmock.RegisterResponder("GET", urls[1],
+	mockTransport.RegisterResponder("GET", urls[1],
 		httpmock.NewStringResponder(404, `{"error":"not found"}`)) // 404 Not Found
 
-	httpmock.RegisterResponder("GET", urls[2],
+	mockTransport.RegisterResponder("GET", urls[2],
 		func(req *http.Request) (*http.Response, error) {
-			time.Sleep(200 * time.Millisecond) // Simulate timeout
+			time.Sleep(200 * time.Millisecond) // Simulated timeout
+
 			return httpmock.NewStringResponse(200, `{"status":"delayed ok"}`), nil
 		})
 
 	largeBody := strings.Repeat("x", 1024) // 1 KB
-	httpmock.RegisterResponder("GET", urls[3],
-		httpmock.NewStringResponder(200, largeBody)) // Large 200 response
+	mockTransport.RegisterResponder("GET", urls[3],
+		httpmock.NewStringResponder(200, largeBody)) // large 200 response
 
 	// run
 	mockRenderer := func(m map[string]*stats.Stats) {}
 
 	cfg := MonitorConfig{
 		URLs:       urls,
-		Client:     &http.Client{Timeout: 300 * time.Millisecond},
+		Client:     client,
 		Renderer:   mockRenderer,
 		TickPeriod: 100 * time.Millisecond,
 	}
@@ -196,11 +207,11 @@ func TestService_AllCombinations(t *testing.T) {
 
 	for _, url := range urls {
 		stat := svc.GetStats()[url]
-		_, _, _, _, bodyBytes, _, success, total := stat.Get()
+		report := stat.Get()
 
-		sumSuccess += success
-		sumTotal += total
-		sumBodyBytes += bodyBytes
+		sumSuccess += report.Success
+		sumTotal += report.Total
+		sumBodyBytes += report.AvgSize
 	}
 
 	sumFail = sumTotal - sumSuccess

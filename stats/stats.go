@@ -3,6 +3,8 @@ package stats
 import (
 	"sync"
 	"time"
+
+	"cli-web-monitor/jsonmodel"
 )
 
 type Stats struct {
@@ -11,9 +13,10 @@ type Stats struct {
 	sizes        []int
 	successCount int
 	requestCount int
+	Responses    []jsonmodel.RequestResponse
 }
 
-func (s *Stats) Add(duration time.Duration, size int, success bool) {
+func (s *Stats) Add(duration time.Duration, size int, success bool, date time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -24,18 +27,20 @@ func (s *Stats) Add(duration time.Duration, size int, success bool) {
 	if success {
 		s.successCount++
 	}
+
+	s.Responses = append(s.Responses, jsonmodel.RequestResponse{Date: date, OK: success, DurationMs: float64(duration)})
 }
 
-func (s *Stats) Get() (minDur, avgDur, maxDur time.Duration, minSize, avgSize, maxSize int, success, total int) {
+func (s *Stats) Get() *StatsReport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.durations) == 0 {
-		return 0, 0, 0, 0, 0, 0, 0, 0
+		return nil
 	}
 
-	minDur = s.durations[0]
-	maxDur = s.durations[0]
+	minDur := s.durations[0]
+	maxDur := s.durations[0]
 	totalDur := time.Duration(0)
 
 	for _, d := range s.durations {
@@ -50,10 +55,10 @@ func (s *Stats) Get() (minDur, avgDur, maxDur time.Duration, minSize, avgSize, m
 		totalDur += d
 	}
 
-	avgDur = totalDur / time.Duration(len(s.durations))
+	avgDur := totalDur / time.Duration(len(s.durations))
 
-	minSize = s.sizes[0]
-	maxSize = s.sizes[0]
+	minSize := s.sizes[0]
+	maxSize := s.sizes[0]
 	totalSize := 0
 
 	for _, sz := range s.sizes {
@@ -68,7 +73,16 @@ func (s *Stats) Get() (minDur, avgDur, maxDur time.Duration, minSize, avgSize, m
 		totalSize += sz
 	}
 
-	avgSize = totalSize / len(s.sizes)
+	avgSize := totalSize / len(s.sizes)
 
-	return minDur, avgDur, maxDur, minSize, avgSize, maxSize, s.successCount, s.requestCount
+	return &StatsReport{
+		MinDuration: minDur,
+		AvgDuration: avgDur,
+		MaxDuration: maxDur,
+		MinSize:     minSize,
+		AvgSize:     avgSize,
+		MaxSize:     maxSize,
+		Success:     s.successCount,
+		Total:       s.requestCount,
+	}
 }

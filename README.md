@@ -18,6 +18,9 @@ It periodically sends HTTP GET requests to each specified URL, collects performa
 - Clean shutdown via `CTRL+C`:
     - Waits for in-flight requests to finish.
     - Displays final stats.
+- REST API for requests for specific url:
+  - `/stats/{website}`
+  - query for pagination - `/stats/{website}?page=2`
 
 ## Installation
 
@@ -39,3 +42,15 @@ go run .  https://www.google.com https://www.catchhotels.com https://seznam.cz
 ```bash
 go test -v ./monitor
 ```
+```bash
+go test ./monitor -race
+```
+
+## Runtime analysis
+```bash
+go tool pprof main cpu.pprof
+```
+```bash
+go tool trace trace.out
+```
+

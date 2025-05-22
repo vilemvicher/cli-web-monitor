@@ -35,13 +35,18 @@ func renderTable(statsMap map[string]*stats.Stats) {
 
 	for _, url := range urls {
 		stat := statsMap[url]
-		minDur, avgDur, maxDur, minSize, avgSize, maxSize, success, total := stat.Get()
+
+		report := stat.Get()
+
+		if stat == nil || report == nil {
+			continue
+		}
 
 		fmt.Printf(format,
 			url,
-			minDur.Milliseconds(), avgDur.Milliseconds(), maxDur.Milliseconds(),
-			minSize, avgSize, maxSize,
-			success, total,
+			report.MinDuration.Milliseconds(), report.AvgDuration.Milliseconds(), report.MaxDuration.Milliseconds(),
+			report.MinSize, report.AvgSize, report.MaxSize,
+			report.Success, report.Total,
 		)
 	}
 
